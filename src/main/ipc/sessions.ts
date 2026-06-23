@@ -10,7 +10,8 @@
  */
 
 import { createLogger } from '@shared/utils/logger';
-import { type IpcMain, type IpcMainInvokeEvent } from 'electron';
+import { type IpcMain, type IpcMainInvokeEvent, shell } from 'electron';
+import * as fs from 'fs';
 
 import { DataCache } from '../services';
 import {
@@ -51,6 +52,9 @@ export function registerSessionHandlers(ipcMain: IpcMain): void {
   ipcMain.handle('get-session-groups', handleGetSessionGroups);
   ipcMain.handle('get-session-metrics', handleGetSessionMetrics);
   ipcMain.handle('get-waterfall-data', handleGetWaterfallData);
+  ipcMain.handle('session:getPath', handleGetSessionFilePath);
+  ipcMain.handle('session:revealPath', handleRevealSessionPath);
+  ipcMain.handle('session:delete', handleDeleteSession);
 
   logger.info('Session handlers registered');
 }
@@ -66,6 +70,9 @@ export function removeSessionHandlers(ipcMain: IpcMain): void {
   ipcMain.removeHandler('get-session-groups');
   ipcMain.removeHandler('get-session-metrics');
   ipcMain.removeHandler('get-waterfall-data');
+  ipcMain.removeHandler('session:getPath');
+  ipcMain.removeHandler('session:revealPath');
+  ipcMain.removeHandler('session:delete');
 
   logger.info('Session handlers removed');
 }
@@ -399,5 +406,98 @@ async function handleGetWaterfallData(
   } catch (error) {
     logger.error(`Error in get-waterfall-data for ${projectId}/${sessionId}:`, error);
     return null;
+  }
+}
+
+function resolveSessionPath(projectId: unknown, sessionId: unknown): { path: string } | { error: string } {
+  const validatedProject = validateProjectId(projectId);
+  const validatedSession = validateSessionId(sessionId);
+  if (!validatedProject.valid || !validatedSession.valid) {
+    return { error: validatedProject.error ?? validatedSession.error ?? 'Invalid parameters' };
+  }
+  const { projectScanner } = registry.getActive();
+  return { path: projectScanner.getSessionPath(validatedProject.value!, validatedSession.value!) };
+}
+
+function handleGetSessionFilePath(
+  _event: IpcMainInvokeEvent,
+  projectId: string,
+  sessionId: string
+): { success: boolean; path?: string; error?: string } {
+  try {
+    const resolved = resolveSessionPath(projectId, sessionId);
+    if ('error' in resolved) {
+      logger.error(`session:getPath rejected: ${resolved.error}`);
+      return { success: false, error: resolved.error };
+    }
+    return { success: true, path: resolved.path };
+  } catch (error) {
+    logger.error(`Error in session:getPath for ${projectId}/${sessionId}:`, error);
+    return { success: false, error: String(error) };
+  }
+}
+
+async function handleRevealSessionPath(
+  _event: IpcMainInvokeEvent,
+  projectId: string,
+  sessionId: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { projectScanner } = registry.getActive();
+    if (projectScanner.getFileSystemProvider().type !== 'local') {
+      return { success: false, error: 'Revealing the session path is only available for local sessions' };
+    }
+
+    const resolved = resolveSessionPath(projectId, sessionId);
+    if ('error' in resolved) {
+      logger.error(`session:revealPath rejected: ${resolved.error}`);
+      return { success: false, error: resolved.error };
+    }
+
+    try {
+      await fs.promises.access(resolved.path);
+    } catch {
+      return { success: false, error: 'Session file does not exist' };
+    }
+
+    shell.showItemInFolder(resolved.path);
+    return { success: true };
+  } catch (error) {
+    logger.error(`Error in session:revealPath for ${projectId}/${sessionId}:`, error);
+    return { success: false, error: String(error) };
+  }
+}
+
+async function handleDeleteSession(
+  _event: IpcMainInvokeEvent,
+  projectId: string,
+  sessionId: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { projectScanner } = registry.getActive();
+    if (projectScanner.getFileSystemProvider().type !== 'local') {
+      return { success: false, error: 'Deleting a session is only available for local sessions' };
+    }
+
+    const resolved = resolveSessionPath(projectId, sessionId);
+    if ('error' in resolved) {
+      logger.error(`session:delete rejected: ${resolved.error}`);
+      return { success: false, error: resolved.error };
+    }
+
+    try {
+      await fs.promises.unlink(resolved.path);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') {
+        return { success: true };
+      }
+      throw error;
+    }
+
+    return { success: true };
+  } catch (error) {
+    logger.error(`Error in session:delete for ${projectId}/${sessionId}:`, error);
+    return { success: false, error: String(error) };
   }
 }
