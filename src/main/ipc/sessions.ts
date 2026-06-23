@@ -12,6 +12,7 @@
 import { createLogger } from '@shared/utils/logger';
 import { type IpcMain, type IpcMainInvokeEvent, shell } from 'electron';
 import * as fs from 'fs';
+import * as path from 'path';
 
 import { DataCache } from '../services';
 import {
@@ -409,14 +410,23 @@ async function handleGetWaterfallData(
   }
 }
 
-function resolveSessionPath(projectId: unknown, sessionId: unknown): { path: string } | { error: string } {
+function resolveSessionPath(
+  projectId: unknown,
+  sessionId: unknown
+): { path: string; projectId: string; sessionId: string } | { error: string } {
   const validatedProject = validateProjectId(projectId);
   const validatedSession = validateSessionId(sessionId);
   if (!validatedProject.valid || !validatedSession.valid) {
     return { error: validatedProject.error ?? validatedSession.error ?? 'Invalid parameters' };
   }
   const { projectScanner } = registry.getActive();
-  return { path: projectScanner.getSessionPath(validatedProject.value!, validatedSession.value!) };
+  const safeProjectId = validatedProject.value!;
+  const safeSessionId = validatedSession.value!;
+  return {
+    path: projectScanner.getSessionPath(safeProjectId, safeSessionId),
+    projectId: safeProjectId,
+    sessionId: safeSessionId,
+  };
 }
 
 function handleGetSessionFilePath(
@@ -489,10 +499,29 @@ async function handleDeleteSession(
       await fs.promises.unlink(resolved.path);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
-      if (code === 'ENOENT') {
-        return { success: true };
+      if (code !== 'ENOENT') {
+        throw error;
       }
-      throw error;
+    }
+
+    // Clean up sidecar files so deletion doesn't leave orphans behind:
+    // the per-session subagents directory and the todo JSON. Missing files
+    // are expected (not every session has them) and are not treated as errors.
+    try {
+      const subagentsPath = projectScanner.getSubagentsPath(resolved.projectId, resolved.sessionId);
+      await fs.promises.rm(subagentsPath, { recursive: true, force: true });
+    } catch (error) {
+      logger.warn(`session:delete - failed to remove subagents dir for ${resolved.sessionId}:`, error);
+    }
+
+    try {
+      const todoPath = path.join(projectScanner.getTodosDir(), `${resolved.sessionId}.json`);
+      await fs.promises.unlink(todoPath);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT') {
+        logger.warn(`session:delete - failed to remove todo file for ${resolved.sessionId}:`, error);
+      }
     }
 
     return { success: true };

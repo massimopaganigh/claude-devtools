@@ -254,9 +254,11 @@ export const SessionItem = React.memo(function SessionItem({
       const result = await api.session.revealPath(activeProjectId, session.id);
       if (!result.success) {
         logger.error('Failed to reveal session path:', result.error);
+        window.alert(result.error ?? 'Failed to reveal the session path.');
       }
     } catch (error) {
       logger.error('Error revealing session path:', error);
+      window.alert('Failed to reveal the session path.');
     }
   }, [activeProjectId, session.id]);
 
@@ -268,9 +270,11 @@ export const SessionItem = React.memo(function SessionItem({
         return result.path;
       }
       logger.error('Failed to resolve session path:', result.error);
+      window.alert(result.error ?? 'Failed to resolve the session path.');
       return null;
     } catch (error) {
       logger.error('Error resolving session path:', error);
+      window.alert('Failed to resolve the session path.');
       return null;
     }
   }, [activeProjectId, session.id]);
@@ -286,6 +290,7 @@ export const SessionItem = React.memo(function SessionItem({
       const result = await api.session.delete(activeProjectId, session.id);
       if (!result.success) {
         logger.error('Failed to delete session:', result.error);
+        window.alert(result.error ?? 'Failed to delete the session.');
         return;
       }
 
@@ -300,6 +305,7 @@ export const SessionItem = React.memo(function SessionItem({
       await refreshSessionsInPlace(activeProjectId);
     } catch (error) {
       logger.error('Error deleting session:', error);
+      window.alert('Failed to delete the session.');
     }
   }, [activeProjectId, closeTabs, refreshSessionsInPlace, session.id, sessionLabel]);
 
